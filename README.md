@@ -11,6 +11,10 @@ Interactive Digital Encounter Engine — the official website and initial web-pr
 
 Read `AGENTS.md` and `docs/PROJECT_CONTEXT.md` before substantial changes. Architecture, features and integration dependencies are documented under `docs/`.
 
+## One-time handoff, not sync
+
+Source delivery uses a one-time GitHub API commit. It does not enable native Lovable Git sync. Future development and deployment are managed independently from this repository. See `docs/HANDOFF.md` for the hosting, domain, Cloud, auth and secret setup that remains separate.
+
 ## Hosting and services
 
 This is a TanStack Start server application, not a static GitHub Pages site. The source retains the existing Lovable Cloud connection and managed sign-in dependencies. Moving source to GitHub does not move hosting, data, accounts, secrets or OAuth settings. No hosting cutover is included.

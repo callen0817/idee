@@ -16,3 +16,4 @@
 - Keep secrets in environment settings and never publish `.env`, personal data or conversation archives. Why: this repository is public and source-only.
 - Consult the owner's separate history archive when prior decisions are unclear; update public technical documentation and `roadmap.md` after significant changes. Why: AI context should remain portable without exposing private conversations.
 - Keep Cloud auth, storage and database connections unchanged until replacements are authorized and tested. Why: changing a source repository is not a backend migration.
+- Deliver source through a one-time GitHub API commit rather than a sync workflow; preserve the existing branch history. Why: source export must remain separate from hosting and managed-service cutover; the generic Lovable banner above is not evidence of an active native sync connection.

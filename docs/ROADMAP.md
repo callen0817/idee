@@ -4,7 +4,7 @@
 - Early-access consent, successful submission and authorized database readback have been verified; review/remove the clearly labelled non-customer verification record when convenient.
 - Repository production build passed GitHub CI; verify an externally hosted Worker runtime before declaring independent deployment ready.
 - Configure the approved deployment host and its environment settings, then test auth redirects on its real URL.
-- Enable continuing source synchronization or a GitHub-based deployment workflow with explicit owner authorization.
+- Manage source independently from GitHub; do not enable native Lovable sync. Set up an independent GitHub-to-host deployment workflow after choosing and authorizing a host.
 - Keep private conversation context available separately to future coding agents.
 
 Future product concepts are not migration work: live discovery, progression, true profiles, Circle/Bridge engines, guardian safeguards, payments and hardware all require separate implementation scope.

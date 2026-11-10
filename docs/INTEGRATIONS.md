@@ -23,3 +23,7 @@
 - `GITHUB_PERSONAL_ACCESS_TOKEN`: development authorization only. Never include it in application source, CI, exported `.env`, docs or browser code.
 
 No environment values, backend identifiers or credential values are published in these docs. A GitHub repository URL must never replace an API base URL, an OAuth redirect or a deployment URL.
+
+## Independent hosting boundary
+
+This is a one-time source handoff, not native Lovable Git sync. The owner manages further development independently. Hosting and domain/DNS configuration, production environment settings, auth return URLs and deployment operations are not transferred automatically; see `HANDOFF.md` for the cutover checklist. Retaining the existing Cloud connection retains a managed-service dependency. Fully independent backend operation requires a separate authorized migration, not just an external website deployment.
