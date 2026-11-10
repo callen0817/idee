@@ -1,0 +1,9 @@
+import { ArrowRight, Flame, MapPin, Users } from "lucide-react";
+import { PhoneConceptFrame } from "@/components/brand/phone-concept-frame";
+import { StatusLabel } from "@/components/brand/status-label";
+
+export function TodayScreen() {
+  return <PhoneConceptFrame><div className="relative flex h-full flex-col bg-background px-5 pb-5 pt-12"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase text-muted-foreground">Today</span><StatusLabel demo>Concept</StatusLabel></div><p className="mt-7 text-xs text-muted-foreground">Good morning</p><h3 className="mt-1 font-display text-3xl">Your world is moving.</h3><div className="mt-6 flex items-center justify-between border-y border-border py-4"><div><p className="text-[10px] uppercase text-muted-foreground">Your Heat</p><p className="mt-1 text-xl font-semibold">1.5×</p></div><Flame className="text-heat-hot" /></div><div className="mt-3 divide-y divide-border"><TodayItem icon={<Users />} text="2 people nearby you should know" /><TodayItem icon={<MapPin />} text="+350 Credits available nearby" /><TodayItem icon={<Flame />} text="Workout completes your 7-day streak" /></div><div className="mt-auto rounded-2xl bg-foreground p-4 text-background"><p className="text-[10px] uppercase text-background/55">Tonight · 7 PM</p><p className="mt-2 font-semibold">Gallery opening</p><p className="mt-1 text-xs text-background/60">3 friends attending</p></div><button className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-full bg-primary text-sm font-bold text-primary-foreground">GO <ArrowRight className="size-4" /></button></div></PhoneConceptFrame>;
+}
+
+function TodayItem({ icon, text }: { icon: React.ReactNode; text: string }) { return <div className="flex items-center gap-3 py-3 text-xs [&_svg]:size-4 [&_svg]:text-muted-foreground"><span>{icon}</span><span>{text}</span></div>; }

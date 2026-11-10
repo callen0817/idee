@@ -1,0 +1,8 @@
+import { MapPin, Search } from "lucide-react";
+import { PhoneConceptFrame } from "@/components/brand/phone-concept-frame";
+import { StatusLabel } from "@/components/brand/status-label";
+
+const pins = [[24,26],[68,20],[49,43],[19,61],[76,68],[48,80]];
+export function LivingMap() {
+  return <PhoneConceptFrame label="IDee living map concept"><div className="relative h-full overflow-hidden bg-secondary"><div className="absolute inset-0 opacity-25" style={{ backgroundImage: "linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px)", backgroundSize: "28px 28px" }} />{pins.map(([left,top], index) => <span key={`${left}-${top}`} className="absolute grid size-7 place-items-center rounded-full border border-background bg-primary shadow-mint" style={{ left: `${left}%`, top: `${top}%`, animation: `network-pulse ${3 + index * .4}s ease-in-out infinite` }}><MapPin className="size-3" /></span>)}<div className="absolute inset-x-4 top-12 flex items-center gap-2 rounded-full border border-border bg-surface-glass px-4 py-3 shadow-glass backdrop-blur-xl"><Search className="size-4 text-muted-foreground" /><span className="text-xs text-muted-foreground">What’s happening tonight?</span></div><div className="absolute bottom-5 left-4 right-4 rounded-2xl border border-border bg-background/80 p-4 backdrop-blur-xl"><div className="flex items-center justify-between"><div><p className="text-[10px] uppercase text-muted-foreground">People you should know</p><p className="mt-1 text-sm font-semibold">Maya · Bridge 91</p></div><StatusLabel demo>Nearby</StatusLabel></div></div></div></PhoneConceptFrame>;
+}

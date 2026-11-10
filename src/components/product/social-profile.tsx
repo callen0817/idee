@@ -1,0 +1,6 @@
+import { dimensions } from "@/data/content";
+import { StatusLabel } from "@/components/brand/status-label";
+
+export function SocialProfile() {
+  return <div className="glass-surface mx-auto max-w-xl rounded-[2rem] p-6 sm:p-9"><div className="flex items-start justify-between"><div className="flex items-center gap-4"><div className="grid size-16 place-items-center rounded-full bg-foreground font-display text-xl text-background">AK</div><div><p className="font-display text-2xl">Alex Kim</p><p className="text-xs text-muted-foreground">London · Level 12</p></div></div><StatusLabel demo>Profile</StatusLabel></div><div className="mt-8 grid grid-cols-2 gap-x-8 gap-y-5">{dimensions.map((item,index) => <div key={item}><div className="flex justify-between text-xs"><span>{item}</span><span className="text-muted-foreground">{72 + index * 3}</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{width:`${58 + index*5}%`}} /></div></div>)}</div><p className="mt-8 text-xs leading-5 text-muted-foreground">Independent dimensions. Different ways of participating—not one universal score.</p></div>;
+}
