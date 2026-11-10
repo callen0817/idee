@@ -1,8 +1,11 @@
 # IDee roadmap
 
-- [ ] Finish and validate the current website pages, early-access form and account shell.
-- [ ] Audit the chosen GitHub repository and preserve existing contents before any transfer.
-- [ ] Preserve accessible project conversations and add portable AI context with explicit history gaps.
-- [ ] Transfer clean application source and documentation to `callen0817/idee` if authorized access permits.
-- [ ] Report transfer verification, integration dependencies and remaining manual actions without changing hosting or live services.
-- [ ] Apply the required package security update and verify the resulting app.
+- [x] Validate public pages, mobile navigation and real early-access consent/persistence.
+- [x] Audit the chosen empty public GitHub repository and transfer clean source without rewriting history.
+- [x] Preserve available history separately in Files with fidelity/gap labels; keep GitHub source-only.
+- [x] Add portable technical context, source export privacy tests and GitHub production-build CI.
+- [x] Apply the required package security update and verify the app and repository build.
+- [x] Provide transfer verification and manual-action report without changing hosting, DNS or current Cloud services.
+- [ ] Verify signed-in account flow — blocked on creation/confirmation of the first user account.
+- [ ] Complete original verbatim history export — unavailable from current history retrieval; original remains in Lovable.
+- [ ] Establish continuing GitHub-driven deployment and validate independent runtime — blocked on approved host and deployment settings.

@@ -14,4 +14,4 @@
 
 ## Local development
 
-Copy `.env.example` to `.env` privately and populate the same existing public Cloud settings. Run `bun install --frozen-lockfile`, then `bun run dev`. Run `bun test` for export-safety checks. Production verification is handled by CI or the deployment host; select a compatible host before changing URLs.
+Copy `.env.example` to `.env` privately and populate the same existing public Cloud settings. Run `bun install --frozen-lockfile`, then `bun run dev`. Run `bun test` for export-safety checks. The exported source passed its production build in GitHub CI; select and verify a compatible runtime host before changing URLs.
