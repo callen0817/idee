@@ -39,3 +39,9 @@ docs/history/
 *.tsbuildinfo
 .lovable/
 .workspace/
+.idee-data/
+firmware/build/
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/sdkconfig
+firmware/sdkconfig.old
