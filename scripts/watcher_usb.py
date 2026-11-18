@@ -97,7 +97,15 @@ def send_cmd(port: str, baud: int, cmd: str, params: dict | None = None, timeout
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="iDee Watcher USB bridge")
-    parser.add_argument("action", choices=["ports", "ping", "sys_info", "hw_test", "cam_snapshot", "mic_capture", "sync_push", "sync_pull"])
+    parser.add_argument(
+        "action",
+        choices=[
+            "ports", "ping", "sys_info", "sscma_info", "hw_test",
+            "cam_snapshot", "mic_capture", "sync_push", "sync_pull",
+            "set_mode", "enroll_embedding", "recognize_now",
+            "record_encounter", "correct_encounter", "delete_audio", "pull_audio",
+        ],
+    )
     parser.add_argument("--port", default="COM4")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--params", default="{}")

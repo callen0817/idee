@@ -13,12 +13,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 #include "nvs_flash.h"
 
 #include "sensecap-watcher.h"
 #include "sscma_client_io.h"
 #include "sscma_client_ops.h"
 
+#include "idee_face.h"
+#include "idee_modes.h"
 #include "idee_protocol.h"
 #include "idee_storage.h"
 
@@ -30,9 +33,11 @@ static sscma_client_handle_t s_sscma = NULL;
 static bool s_sscma_ready = false;
 static bool s_sd_mounted = false;
 static bool s_codec_ready = false;
+static bool s_camera_active = false;
 
 static lv_obj_t *s_lbl_title = NULL;
 static lv_obj_t *s_lbl_status = NULL;
+static lv_obj_t *s_lbl_cue = NULL;
 static lv_obj_t *s_lbl_stats = NULL;
 static lv_obj_t *s_lbl_battery = NULL;
 
@@ -40,17 +45,24 @@ static SemaphoreHandle_t s_snap_sem = NULL;
 static char *s_last_img_b64 = NULL;
 static size_t s_last_img_len = 0;
 static int s_last_box_count = 0;
+static float s_last_emb[IDEE_FACE_DIM];
+static bool s_last_has_emb = false;
 
-static void ui_update_status(const char *status_text)
+static void ui_set_state(const char *headline, const char *cue_line)
 {
     if (!s_disp || !s_lbl_status) return;
-    if (lvgl_port_lock(100)) {
-        lv_label_set_text(s_lbl_status, status_text);
+    if (lvgl_port_lock(150)) {
+        lv_label_set_text(s_lbl_status, headline ? headline : "Ready");
+        if (s_lbl_cue) {
+            lv_label_set_text(s_lbl_cue, cue_line ? cue_line : "");
+        }
         int p = 0, e = 0, t = 0;
         idee_storage_get_counts(&p, &e, &t);
-        char buf[96];
-        snprintf(buf, sizeof(buf), "People: %d  |  Encounters: %d\nTemplates: %d  |  SD: %s",
-                 p, e, t, s_sd_mounted ? "OK" : "SPIFFS");
+        char buf[112];
+        snprintf(buf, sizeof(buf), "Mode: %s  |  Cam: %s\nPeople: %d  |  Enc: %d  |  Idx: %d",
+                 idee_modes_name(idee_modes_get()),
+                 s_camera_active ? "ON" : "OFF",
+                 p, e, idee_face_active_count());
         lv_label_set_text(s_lbl_stats, buf);
 
         char bat_buf[48];
@@ -79,12 +91,18 @@ static void on_sscma_event(sscma_client_handle_t client, const sscma_client_repl
         s_last_img_len = (size_t)img_size;
     }
 
-    sscma_client_box_t *boxes = NULL;
-    int box_count = 0;
-    if (sscma_utils_fetch_boxes_from_reply(reply, &boxes, &box_count) == ESP_OK) {
-        s_last_box_count = box_count;
-        free(boxes);
+    int dim = 0;
+    int boxes = 0;
+    s_last_has_emb = idee_face_extract_from_sscma(reply, s_last_emb, &dim, &boxes);
+    if (boxes == 0) {
+        sscma_client_box_t *b = NULL;
+        int bc = 0;
+        if (sscma_utils_fetch_boxes_from_reply(reply, &b, &bc) == ESP_OK) {
+            boxes = bc;
+            free(b);
+        }
     }
+    s_last_box_count = boxes;
 
     if (s_snap_sem) {
         xSemaphoreGive(s_snap_sem);
@@ -116,7 +134,7 @@ static esp_err_t capture_wav_to_file(const char *rel_path, int duration_ms, doub
 {
     if (!s_codec_ready) return ESP_ERR_INVALID_STATE;
     if (duration_ms < 200) duration_ms = 200;
-    if (duration_ms > 10000) duration_ms = 10000;
+    if (duration_ms > 15000) duration_ms = 15000;
 
     const int sr = DRV_AUDIO_SAMPLE_RATE;
     const int total_samples = (sr * duration_ms) / 1000;
@@ -129,7 +147,6 @@ static esp_err_t capture_wav_to_file(const char *rel_path, int duration_ms, doub
     }
     if (!wav) return ESP_ERR_NO_MEM;
 
-    /* Standard 44-byte RIFF/WAVE header (16kHz, 16-bit, mono) */
     memcpy(wav, "RIFF", 4);
     uint32_t chunk_sz = (uint32_t)(36 + data_bytes);
     memcpy(wav + 4, &chunk_sz, 4);
@@ -178,7 +195,7 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
     if (strcmp(cmd, "ping") == 0) {
         cJSON_AddBoolToObject(res, "ok", true);
         cJSON_AddStringToObject(res, "fw", "idee-watcher");
-        cJSON_AddStringToObject(res, "ver", "0.1.0");
+        cJSON_AddStringToObject(res, "ver", "0.2.0");
         cJSON_AddStringToObject(res, "idf", IDF_VER);
         return res;
     }
@@ -186,9 +203,15 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
     if (strcmp(cmd, "sys_info") == 0) {
         int p = 0, e = 0, t = 0;
         idee_storage_get_counts(&p, &e, &t);
+        idee_mode_config_t mcfg;
+        idee_modes_get_config(&mcfg);
+
         cJSON_AddBoolToObject(res, "ok", true);
         cJSON_AddStringToObject(res, "fw", "idee-watcher");
-        cJSON_AddStringToObject(res, "ver", "0.1.0");
+        cJSON_AddStringToObject(res, "ver", "0.2.0");
+        cJSON_AddStringToObject(res, "mode", idee_modes_name(mcfg.mode));
+        cJSON_AddBoolToObject(res, "camera_active", s_camera_active);
+        cJSON_AddBoolToObject(res, "camera_off_by_default", mcfg.camera_off_by_default);
         cJSON_AddNumberToObject(res, "free_heap", (double)esp_get_free_heap_size());
         cJSON_AddNumberToObject(res, "free_internal", (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         cJSON_AddNumberToObject(res, "free_psram", (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
@@ -203,6 +226,50 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
         cJSON_AddNumberToObject(res, "people_count", p);
         cJSON_AddNumberToObject(res, "encounters_count", e);
         cJSON_AddNumberToObject(res, "templates_count", t);
+        cJSON_AddNumberToObject(res, "active_face_index", idee_face_active_count());
+        return res;
+    }
+
+    if (strcmp(cmd, "sscma_info") == 0) {
+        if (!s_sscma || !s_sscma_ready) {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "sscma_not_ready");
+            return res;
+        }
+        sscma_client_info_t *info = NULL;
+        sscma_client_model_t *model = NULL;
+        cJSON_AddBoolToObject(res, "ok", true);
+        if (sscma_client_get_info(s_sscma, &info, true) == ESP_OK && info) {
+            cJSON_AddStringToObject(res, "id", info->id ? info->id : "");
+            cJSON_AddStringToObject(res, "name", info->name ? info->name : "");
+            cJSON_AddStringToObject(res, "hw_ver", info->hw_ver ? info->hw_ver : "");
+            cJSON_AddStringToObject(res, "sw_ver", info->sw_ver ? info->sw_ver : "");
+            cJSON_AddStringToObject(res, "fw_ver", info->fw_ver ? info->fw_ver : "");
+        }
+        if (sscma_client_get_model(s_sscma, &model, true) == ESP_OK && model) {
+            cJSON_AddNumberToObject(res, "model_id", model->id);
+            cJSON_AddStringToObject(res, "model_name", model->name ? model->name : "");
+            cJSON_AddStringToObject(res, "model_ver", model->ver ? model->ver : "");
+        }
+        return res;
+    }
+
+    if (strcmp(cmd, "set_mode") == 0) {
+        const cJSON *m = params ? cJSON_GetObjectItemCaseSensitive(params, "mode") : NULL;
+        const char *ms = cJSON_IsString(m) ? m->valuestring : "on_demand";
+        if (strcmp(ms, "always_on") == 0) {
+            idee_modes_set(IDEE_MODE_ALWAYS_ON);
+        } else if (strcmp(ms, "context_aware") == 0) {
+            idee_modes_set(IDEE_MODE_CONTEXT_AWARE);
+        } else {
+            idee_modes_set(IDEE_MODE_ON_DEMAND);
+            s_camera_active = false;
+        }
+        ui_set_state("Mode updated", idee_modes_name(idee_modes_get()));
+        cJSON_AddBoolToObject(res, "ok", true);
+        cJSON_AddStringToObject(res, "mode", idee_modes_name(idee_modes_get()));
+        cJSON_AddBoolToObject(res, "camera_active", s_camera_active);
         return res;
     }
 
@@ -213,18 +280,117 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
             cJSON_AddStringToObject(res, "error", "sscma_not_init");
             return res;
         }
+        s_camera_active = true;
+        ui_set_state("Scanning...", "Capturing camera frame");
         xSemaphoreTake(s_snap_sem, 0);
         esp_err_t err = sscma_client_sample(s_sscma, 1);
         if (err == ESP_OK && xSemaphoreTake(s_snap_sem, pdMS_TO_TICKS(4000)) == pdTRUE && s_last_img_b64) {
             cJSON_AddBoolToObject(res, "ok", true);
             cJSON_AddNumberToObject(res, "b64_len", (double)s_last_img_len);
             cJSON_AddNumberToObject(res, "box_count", s_last_box_count);
+            cJSON_AddBoolToObject(res, "has_embedding", s_last_has_emb);
             cJSON_AddStringToObject(res, "image_b64", s_last_img_b64);
-            ui_update_status("Snapshot captured");
         } else {
             *ok_out = false;
             cJSON_AddBoolToObject(res, "ok", false);
             cJSON_AddStringToObject(res, "error", "snapshot_timeout");
+        }
+        s_camera_active = (idee_modes_get() == IDEE_MODE_ALWAYS_ON);
+        ui_set_state("Ready", "");
+        return res;
+    }
+
+    if (strcmp(cmd, "enroll_embedding") == 0) {
+        const cJSON *pid = params ? cJSON_GetObjectItemCaseSensitive(params, "person_id") : NULL;
+        const cJSON *emb = params ? cJSON_GetObjectItemCaseSensitive(params, "embedding") : NULL;
+        const cJSON *mid = params ? cJSON_GetObjectItemCaseSensitive(params, "model_id") : NULL;
+        const cJSON *mver = params ? cJSON_GetObjectItemCaseSensitive(params, "model_version") : NULL;
+        if (!cJSON_IsString(pid) || !cJSON_IsArray(emb) || cJSON_GetArraySize(emb) != IDEE_FACE_DIM) {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "invalid_person_or_embedding");
+            return res;
+        }
+        float vec[IDEE_FACE_DIM];
+        for (int i = 0; i < IDEE_FACE_DIM; i++) {
+            cJSON *v = cJSON_GetArrayItem(emb, i);
+            vec[i] = cJSON_IsNumber(v) ? (float)v->valuedouble : 0.0f;
+        }
+        esp_err_t err = idee_face_enroll_embedding(
+            pid->valuestring,
+            cJSON_IsString(mid) ? mid->valuestring : "scrfd-mfn-128d-int8",
+            cJSON_IsString(mver) ? mver->valuestring : "1.0.0",
+            vec,
+            IDEE_FACE_DIM);
+        if (err == ESP_OK) {
+            char name[64], cue[128];
+            idee_face_lookup_person_cue(pid->valuestring, name, sizeof(name), cue, sizeof(cue));
+            ui_set_state("Enrolled", name[0] ? name : pid->valuestring);
+            cJSON_AddBoolToObject(res, "ok", true);
+            cJSON_AddNumberToObject(res, "active_face_index", idee_face_active_count());
+        } else {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", esp_err_to_name(err));
+        }
+        return res;
+    }
+
+    if (strcmp(cmd, "recognize_now") == 0) {
+        float query[IDEE_FACE_DIM];
+        bool have_query = false;
+        const cJSON *emb = params ? cJSON_GetObjectItemCaseSensitive(params, "embedding") : NULL;
+        const cJSON *thr = params ? cJSON_GetObjectItemCaseSensitive(params, "threshold") : NULL;
+        float threshold = cJSON_IsNumber(thr) ? (float)thr->valuedouble : IDEE_DEFAULT_FACE_THRESHOLD;
+
+        s_camera_active = true;
+        ui_set_state("Scanning...", "Looking for face");
+
+        if (cJSON_IsArray(emb) && cJSON_GetArraySize(emb) == IDEE_FACE_DIM) {
+            for (int i = 0; i < IDEE_FACE_DIM; i++) {
+                cJSON *v = cJSON_GetArrayItem(emb, i);
+                query[i] = cJSON_IsNumber(v) ? (float)v->valuedouble : 0.0f;
+            }
+            have_query = true;
+        } else if (s_sscma && s_sscma_ready) {
+            xSemaphoreTake(s_snap_sem, 0);
+            if (sscma_client_sample(s_sscma, 1) == ESP_OK && xSemaphoreTake(s_snap_sem, pdMS_TO_TICKS(3500)) == pdTRUE) {
+                if (s_last_has_emb) {
+                    memcpy(query, s_last_emb, sizeof(query));
+                    have_query = true;
+                }
+            }
+        }
+
+        s_camera_active = (idee_modes_get() == IDEE_MODE_ALWAYS_ON);
+
+        if (!have_query) {
+            ui_set_state("Unknown", "No face embedding detected");
+            cJSON_AddBoolToObject(res, "ok", true);
+            cJSON_AddBoolToObject(res, "matched", false);
+            cJSON_AddStringToObject(res, "status", "no_embedding");
+            cJSON_AddNumberToObject(res, "box_count", s_last_box_count);
+            return res;
+        }
+
+        idee_face_match_t m;
+        idee_face_match(query, IDEE_FACE_DIM, threshold, &m);
+        cJSON_AddBoolToObject(res, "ok", true);
+        cJSON_AddBoolToObject(res, "matched", m.matched);
+        cJSON_AddNumberToObject(res, "confidence", m.confidence);
+        cJSON_AddNumberToObject(res, "second_best", m.second_best);
+        cJSON_AddNumberToObject(res, "candidates_checked", m.candidates_checked);
+
+        if (m.matched) {
+            char name[64], cue[128];
+            idee_face_lookup_person_cue(m.person_id, name, sizeof(name), cue, sizeof(cue));
+            cJSON_AddStringToObject(res, "person_id", m.person_id);
+            cJSON_AddStringToObject(res, "name", name);
+            cJSON_AddStringToObject(res, "cue", cue);
+            ui_set_state(name[0] ? name : m.person_id, cue);
+            play_beep(1046, 80);
+        } else {
+            ui_set_state("Unknown", "Press to enroll or ID later");
         }
         return res;
     }
@@ -242,18 +408,139 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
         snprintf(rel, sizeof(rel), "audio/%s", name);
         double rms = 0.0;
         size_t bytes = 0;
+        bsp_rgb_set(40, 8, 0);
+        ui_set_state("REC ●", "Capturing audio");
         esp_err_t err = capture_wav_to_file(rel, dur, &rms, &bytes);
+        bsp_rgb_set(0, 12, 8);
         if (err == ESP_OK) {
             cJSON_AddBoolToObject(res, "ok", true);
             cJSON_AddStringToObject(res, "path", rel);
             cJSON_AddNumberToObject(res, "bytes", (double)bytes);
             cJSON_AddNumberToObject(res, "rms", rms);
-            ui_update_status("Mic capture saved");
+            ui_set_state("Ready", "Audio captured");
         } else {
             *ok_out = false;
             cJSON_AddBoolToObject(res, "ok", false);
             cJSON_AddStringToObject(res, "error", esp_err_to_name(err));
+            ui_set_state("Ready", "Audio capture failed");
         }
+        return res;
+    }
+
+    if (strcmp(cmd, "record_encounter") == 0) {
+        const cJSON *pid = params ? cJSON_GetObjectItemCaseSensitive(params, "person_id") : NULL;
+        const cJSON *ev = params ? cJSON_GetObjectItemCaseSensitive(params, "evidence_type") : NULL;
+        const cJSON *sum = params ? cJSON_GetObjectItemCaseSensitive(params, "summary") : NULL;
+        const cJSON *dur_item = params ? cJSON_GetObjectItemCaseSensitive(params, "duration_ms") : NULL;
+        const cJSON *conf_item = params ? cJSON_GetObjectItemCaseSensitive(params, "confidence") : NULL;
+
+        int dur = cJSON_IsNumber(dur_item) ? dur_item->valueint : 2000;
+        float conf = cJSON_IsNumber(conf_item) ? (float)conf_item->valuedouble : 0.0f;
+        const char *person_id = cJSON_IsString(pid) ? pid->valuestring : NULL;
+
+        char enc_id[48];
+        snprintf(enc_id, sizeof(enc_id), "enc_%llu", (unsigned long long)(esp_timer_get_time() / 1000));
+        char rel_audio[96];
+        snprintf(rel_audio, sizeof(rel_audio), "audio/%s.wav", enc_id);
+
+        bsp_rgb_set(48, 0, 0);
+        ui_set_state("REC ●", "Consented encounter capture");
+        double rms = 0.0;
+        size_t wav_bytes = 0;
+        esp_err_t wav_err = capture_wav_to_file(rel_audio, dur, &rms, &wav_bytes);
+        bsp_rgb_set(0, 12, 8);
+
+        esp_err_t enc_err = idee_modes_save_encounter(
+            enc_id,
+            person_id,
+            cJSON_IsString(ev) ? ev->valuestring : "button",
+            cJSON_IsString(sum) ? sum->valuestring : "Consented audio encounter (pending offline STT)",
+            conf,
+            wav_err == ESP_OK ? rel_audio : NULL);
+
+        if (enc_err == ESP_OK) {
+            ui_set_state("Encounter saved", enc_id);
+            cJSON_AddBoolToObject(res, "ok", true);
+            cJSON_AddStringToObject(res, "encounter_id", enc_id);
+            cJSON_AddStringToObject(res, "audio_path", wav_err == ESP_OK ? rel_audio : "");
+            cJSON_AddNumberToObject(res, "audio_bytes", (double)wav_bytes);
+            cJSON_AddNumberToObject(res, "mic_rms", rms);
+        } else {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", esp_err_to_name(enc_err));
+        }
+        return res;
+    }
+
+    if (strcmp(cmd, "correct_encounter") == 0) {
+        const cJSON *eid = params ? cJSON_GetObjectItemCaseSensitive(params, "encounter_id") : NULL;
+        const cJSON *pid = params ? cJSON_GetObjectItemCaseSensitive(params, "person_id") : NULL;
+        const cJSON *reason = params ? cJSON_GetObjectItemCaseSensitive(params, "reason") : NULL;
+        if (!cJSON_IsString(eid)) {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "missing_encounter_id");
+            return res;
+        }
+        esp_err_t err = idee_modes_correct_encounter(
+            eid->valuestring,
+            cJSON_IsString(pid) ? pid->valuestring : NULL,
+            cJSON_IsString(reason) ? reason->valuestring : "user_correction");
+        *ok_out = (err == ESP_OK);
+        cJSON_AddBoolToObject(res, "ok", err == ESP_OK);
+        if (err != ESP_OK) cJSON_AddStringToObject(res, "error", esp_err_to_name(err));
+        return res;
+    }
+
+    if (strcmp(cmd, "delete_audio") == 0) {
+        const cJSON *eid = params ? cJSON_GetObjectItemCaseSensitive(params, "encounter_id") : NULL;
+        if (!cJSON_IsString(eid)) {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "missing_encounter_id");
+            return res;
+        }
+        esp_err_t err = idee_modes_delete_encounter_audio(eid->valuestring);
+        *ok_out = (err == ESP_OK);
+        cJSON_AddBoolToObject(res, "ok", err == ESP_OK);
+        if (err != ESP_OK) cJSON_AddStringToObject(res, "error", esp_err_to_name(err));
+        return res;
+    }
+
+    if (strcmp(cmd, "pull_audio") == 0) {
+        const cJSON *ap = params ? cJSON_GetObjectItemCaseSensitive(params, "audio_path") : NULL;
+        if (!cJSON_IsString(ap) || !ap->valuestring[0]) {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "missing_audio_path");
+            return res;
+        }
+        char *raw = NULL;
+        size_t raw_len = 0;
+        if (idee_storage_read_file(ap->valuestring, &raw, &raw_len) != ESP_OK || !raw) {
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "audio_not_found");
+            return res;
+        }
+        size_t b64_cap = ((raw_len + 2) / 3) * 4 + 8;
+        unsigned char *b64 = heap_caps_malloc(b64_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!b64) b64 = malloc(b64_cap);
+        size_t out_len = 0;
+        if (!b64 || mbedtls_base64_encode(b64, b64_cap, &out_len, (const unsigned char *)raw, raw_len) != 0) {
+            free(raw);
+            free(b64);
+            *ok_out = false;
+            cJSON_AddBoolToObject(res, "ok", false);
+            cJSON_AddStringToObject(res, "error", "b64_encode_failed");
+            return res;
+        }
+        free(raw);
+        cJSON_AddBoolToObject(res, "ok", true);
+        cJSON_AddNumberToObject(res, "bytes", (double)raw_len);
+        cJSON_AddStringToObject(res, "audio_b64", (const char *)b64);
+        free(b64);
         return res;
     }
 
@@ -273,7 +560,7 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
         cJSON_AddNumberToObject(res, "mic_rms", mic_rms);
         cJSON_AddBoolToObject(res, "speaker_ok", s_codec_ready);
         cJSON_AddBoolToObject(res, "sscma_ready", s_sscma_ready);
-        ui_update_status("HW test complete");
+        ui_set_state("HW test complete", "");
         return res;
     }
 
@@ -310,6 +597,7 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
                 idee_storage_write_atomic("templates.json", s, strlen(s));
                 free(s);
                 t_count = cJSON_GetArraySize(templates);
+                idee_face_reload_index();
             }
         }
         cJSON *settings = params ? cJSON_GetObjectItemCaseSensitive(params, "settings") : NULL;
@@ -319,19 +607,21 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
                 idee_storage_write_atomic("settings.json", s, strlen(s));
                 free(s);
             }
+            idee_modes_apply_settings_json(settings);
         }
 
         idee_storage_set_counts(p_count, e_count, t_count);
         if (sync_id[0]) {
             idee_storage_record_sync_id(sync_id);
         }
-        ui_update_status("Synced from Desktop");
+        ui_set_state("Synced from Desktop", "");
 
         cJSON_AddBoolToObject(res, "ok", true);
         cJSON_AddBoolToObject(res, "duplicate", false);
         cJSON_AddStringToObject(res, "sync_id", sync_id);
         cJSON_AddNumberToObject(res, "people_count", p_count);
         cJSON_AddNumberToObject(res, "templates_count", t_count);
+        cJSON_AddNumberToObject(res, "active_face_index", idee_face_active_count());
         return res;
     }
 
@@ -360,18 +650,6 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
     return res;
 }
 
-static void knob_left_cb(void *arg, void *data)
-{
-    ui_update_status("Wheel: Left");
-    idee_protocol_send_event("knob", cJSON_CreateString("left"));
-}
-
-static void knob_right_cb(void *arg, void *data)
-{
-    ui_update_status("Wheel: Right");
-    idee_protocol_send_event("knob", cJSON_CreateString("right"));
-}
-
 static void init_ui(void)
 {
     if (!s_disp) return;
@@ -384,26 +662,35 @@ static void init_ui(void)
         lv_label_set_text(s_lbl_title, "iDee");
         lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(0x6EE7B7), 0);
         lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_24, 0);
-        lv_obj_align(s_lbl_title, LV_ALIGN_TOP_MID, 0, 56);
+        lv_obj_align(s_lbl_title, LV_ALIGN_TOP_MID, 0, 44);
 
         s_lbl_status = lv_label_create(scr);
-        lv_label_set_text(s_lbl_status, "Ready (On Demand)");
+        lv_label_set_text(s_lbl_status, "Ready");
         lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(0xF3F4F6), 0);
-        lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_18, 0);
-        lv_obj_align(s_lbl_status, LV_ALIGN_CENTER, 0, -16);
+        lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_status, LV_ALIGN_CENTER, 0, -40);
+
+        s_lbl_cue = lv_label_create(scr);
+        lv_label_set_text(s_lbl_cue, "");
+        lv_label_set_long_mode(s_lbl_cue, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_lbl_cue, 320);
+        lv_obj_set_style_text_color(s_lbl_cue, lv_color_hex(0xA7F3D0), 0);
+        lv_obj_set_style_text_font(s_lbl_cue, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_align(s_lbl_cue, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_lbl_cue, LV_ALIGN_CENTER, 0, 12);
 
         s_lbl_stats = lv_label_create(scr);
-        lv_label_set_text(s_lbl_stats, "People: 0  |  Encounters: 0");
+        lv_label_set_text(s_lbl_stats, "Mode: on_demand | Cam: OFF");
         lv_obj_set_style_text_color(s_lbl_stats, lv_color_hex(0x9CA3AF), 0);
         lv_obj_set_style_text_font(s_lbl_stats, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_align(s_lbl_stats, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_lbl_stats, LV_ALIGN_CENTER, 0, 44);
+        lv_obj_align(s_lbl_stats, LV_ALIGN_CENTER, 0, 76);
 
         s_lbl_battery = lv_label_create(scr);
         lv_label_set_text(s_lbl_battery, "Bat: --%");
         lv_obj_set_style_text_color(s_lbl_battery, lv_color_hex(0x6B7280), 0);
         lv_obj_set_style_text_font(s_lbl_battery, &lv_font_montserrat_14, 0);
-        lv_obj_align(s_lbl_battery, LV_ALIGN_BOTTOM_MID, 0, -44);
+        lv_obj_align(s_lbl_battery, LV_ALIGN_BOTTOM_MID, 0, -36);
 
         lvgl_port_unlock();
     }
@@ -418,7 +705,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "=== iDee Watcher v0.1.0 Booting ===");
+    ESP_LOGI(TAG, "=== iDee Watcher v0.2.0 Booting ===");
 
     s_io_exp = bsp_io_expander_init();
     s_disp = bsp_lvgl_init();
@@ -428,30 +715,26 @@ void app_main(void)
     bsp_rtc_init();
 
     if (bsp_sdcard_is_inserted()) {
-        ESP_LOGI(TAG, "SD card detected, mounting...");
         if (bsp_sdcard_init_default() == ESP_OK) {
             s_sd_mounted = true;
-        } else {
-            ESP_LOGW(TAG, "SD mount failed, falling back to SPIFFS");
         }
     }
     if (!s_sd_mounted) {
-        ESP_LOGI(TAG, "Mounting SPIFFS...");
         bsp_spiffs_init_default();
     }
     idee_storage_init(s_sd_mounted);
+    idee_modes_init();
+    idee_face_reload_index();
 
-    ESP_LOGI(TAG, "Initializing audio codec...");
     if (bsp_codec_init() == ESP_OK) {
         s_codec_ready = true;
     }
 
     init_ui();
-    ui_update_status("Ready (On Demand)");
+    ui_set_state("Ready", "");
     idee_protocol_start(handle_cmd);
 
     s_snap_sem = xSemaphoreCreateBinary();
-    ESP_LOGI(TAG, "Initializing Himax SSCMA client...");
     s_sscma = bsp_sscma_client_init();
     if (s_sscma) {
         const sscma_client_callback_t cb = {
@@ -464,6 +747,5 @@ void app_main(void)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        ui_update_status("Ready (On Demand)");
     }
 }

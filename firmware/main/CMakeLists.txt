@@ -3,6 +3,8 @@ idf_component_register(
         "main.c"
         "idee_protocol.c"
         "idee_storage.c"
+        "idee_face.c"
+        "idee_modes.c"
     INCLUDE_DIRS "."
-    REQUIRES nvs_flash esp_timer esp_psram fatfs spiffs json espressif__esp_io_expander
+    REQUIRES nvs_flash esp_timer esp_psram fatfs spiffs json mbedtls espressif__esp_io_expander
 )

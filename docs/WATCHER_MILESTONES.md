@@ -10,41 +10,12 @@ Host: Windows PC (local Antigravity session)
 
 **Status:** PASS
 
-### 0.1 Codebase & Toolchain Audit
-- **Repository:** `callen0817/idee` cloned to `c:\Users\calle\OneDrive\Desktop\iDee` on branch `feat/idee-watcher`.
-  - Web/Desktop stack: TanStack Start, React 19, TypeScript, Vite 8, Tailwind CSS v4.
-  - Firmware stack: Built fresh under `firmware/` using `Seeed-Studio/SenseCAP-Watcher-Firmware` BSP (`sensecap-watcher`, `sscma_client`, `esp_lvgl_port`, `lvgl`, `knob`, `esp_jpeg_simd`) on **ESP-IDF `v5.2.1`** (`C:\esp\esp-idf-v5.2.1`).
-- **ESP32-S3 ↔ Himax WiseEye2 (HX6538) Runtime Link:**
-  - `SPI2` (`12 MHz`, `GPIO 4/5/6`, CS `GPIO 21`, SYNC `IO_EXP P0.6`, RST `IO_EXP P0.7`) carries SSCMA inference results and JPEG snapshots from Himax to ESP32-S3.
-  - `UART1` (`921600 baud`, `TX=GPIO17`, `RX=GPIO18`) is wired for Himax flashing.
-  - Power gate: `BSP_PWR_AI_CHIP` (`IO_EXP P1.3` / pin 11).
-
-### 0.2 Connected Watcher USB Discovery
-- **Bridge:** WCH CH342 Dual USB-to-Serial (`VID:PID=1A86:55D2`, `SER=56D5018737`, `LOCATION=1-1`)
-  - **`COM4`** (`USB-Enhanced-SERIAL-B CH342`, `MI_02`): **ESP32-S3** console/programming/sync UART (`115200` baud).
-  - **`COM3`** (`USB-Enhanced-SERIAL-A CH342`, `MI_00`): **Himax WiseEye2 (HX6538)** UART.
-
-### 0.3 Hardware, Power & Resource Baseline (`idee-watcher v0.1.0`)
-Verified on live Watcher on `COM4`:
-- `ping`: `{"ok": true, "fw": "idee-watcher", "ver": "0.1.0", "idf": "v5.2.1"}`
-- `sys_info`:
-  - `free_heap`: `7,621,688` bytes (~7.27 MiB)
-  - `free_internal`: `289,391` bytes (~282 KiB)
-  - `free_psram`: `7,580,652` bytes (~7.23 MiB)
-  - `battery_mv`: `4161` mV (`100%`, `charging: true`)
-  - `storage_dir`: `/spiffs/idee` (auto-fallback when no microSD card is inserted; `sd_mounted: false`)
-  - `sscma_ready`: `true`, `codec_ready`: `true`
-- `hw_test`:
-  - `storage_ok: true` (atomic `.tmp` + `fsync` + `rename`)
-  - `mic_ok: true` (`mic_rms: 1688.67`, ES7243E 16 kHz mono)
-  - `speaker_ok: true` (880 Hz tone via ES8311)
-  - `sscma_ready: true`
-- **Deterministic Replay Captures:**
-  - `.idee-data/replay/frame_01.jpg` (1,808 bytes real Himax JPEG snapshot, `box_count=0`)
-  - `audio/replay_01.wav` on Watcher (`/spiffs/idee/audio/replay_01.wav`, 32,044 bytes, 16 kHz mono PCM WAV, `rms=13850.78`)
-
-### 0.4 Firmware Protection
-- Factory NVS (`nvs_0x9000_0x4000.bin`, 16,384 bytes) and bootloader/partition header (`boot_part_nvs_0x0_0x10000.bin`, 65,536 bytes) backed up locally outside git in `C:\Users\calle\watcher_backups\`.
+### Summary
+- Cloned `callen0817/idee` on branch `feat/idee-watcher`; installed `ESP-IDF v5.2.1` (`C:\esp\esp-idf-v5.2.1`).
+- Identified USB serial interfaces: `COM4` = ESP32-S3 (`MI_02`), `COM3` = Himax WiseEye2 (`MI_00`).
+- Documented ESP32-S3 ↔ Himax `SPI2` (12 MHz) + `UART1` (921600) boundary and power gate `BSP_PWR_AI_CHIP`.
+- Backed up factory NVS (`nvs_0x9000_0x4000.bin`) and header (`boot_part_nvs_0x0_0x10000.bin`) to `C:\Users\calle\watcher_backups\`.
+- Captured deterministic replay artifacts: `.idee-data/replay/frame_01.jpg` (1,808 bytes) and `/spiffs/idee/audio/replay_01.wav` (32,044 bytes).
 
 ---
 
@@ -52,23 +23,75 @@ Verified on live Watcher on `COM4`:
 
 **Status:** PASS
 
-### Files Added / Changed
-- `src/lib/companion/types.ts` — `Person`, `RecognitionTemplate` (with `modelId`, `modelVersion`, `embeddingDim`, `quantization`, `enrollmentProvenance`, `consentGiven`), `Encounter`, `CompanionSettings`.
-- `src/lib/companion/importers.ts` — `.vcf` (vCard 2.1/3.0/4.0) and `.csv` (Google Contacts / Outlook) parsers + deduplicating `mergeImportedPeople`.
-- `src/lib/companion/store.server.ts` — Atomic local persistence in `.idee-data/companion.json` (outside git).
-- `src/lib/companion/companion.functions.ts` — TanStack `createServerFn` endpoints + single-owner USB bridge wrapper.
-- `src/routes/companion.tsx` — Minimal 4-tab UI (`People`, `Encounters`, `Device`, `Settings`) with `.vcf`/`.csv` import, merge/edit/delete, Watcher-camera enrollment, and framed USB sync.
-- `scripts/watcher_usb.py` — Framed `\xaa\x55ID` + CRC32 serial client with `dtr=False, rts=False` before `open()` (no unintended resets, auto-closes port after each call).
-- `firmware/` — Self-contained ESP-IDF `v5.2.1` Watcher project (`main/main.c`, `main/idee_protocol.c`, `main/idee_storage.c`, 8MB-compatible `partitions.csv`, `sdkconfig.defaults`).
+### Files
+- `src/lib/companion/types.ts`, `importers.ts`, `store.server.ts`, `companion.functions.ts`, `src/routes/companion.tsx`
+- `scripts/watcher_usb.py` (binary-framed `\xaa\x55ID` + CRC32 single-owner serial client)
+- `firmware/main/idee_protocol.c`, `idee_storage.c`, `main.c`
 
-### Verification Results
-- `npm run build`: Passed (client + SSR bundles built cleanly with `/companion`).
-- `idf.py build` & `idf.py -p COM4 -b 115200 flash`: Passed (`idee_watcher.bin` = `0xcebe0` bytes, 73% free in `factory` partition).
-- **Live Framed USB Sync & Persistence Test (`COM4`):**
-  - `sync_push` (`sync_id: m1_test_001`): `{"ok": true, "duplicate": false, "people_count": 2, "templates_count": 1}`
-  - Re-sent `sync_push` (`sync_id: m1_test_001`): `{"ok": true, "duplicate": true}` (idempotency verified)
-  - Hard RTS reboot -> `sys_info` + `sync_pull`: Both contacts (`Sarah Turner`, `Alex Rivera`) recovered intact from flash storage with zero duplication or data loss.
+### Verification
+- `npm run build` passed.
+- Live `sync_push` (`m1_test_001`) -> idempotent duplicate check (`duplicate: true`) -> hard RTS reboot -> `sync_pull` recovered contacts with zero loss.
 
-### Known Limitations
-- No microSD card is currently inserted in the Watcher slot (`sd_mounted: false`), so on-device storage is using the `/spiffs/idee` (`storage` 1.875 MiB) partition fallback until a microSD card is inserted.
-- Face embedding extraction/matching on Himax/ESP32-S3 is the next milestone (**M2**).
+---
+
+## M2 — Implement Real Face Recognition
+
+**Status:** PASS (On-Device Index & Cosine Matching Verified; Himax Face-Embedding Weights Pending Separate Model Flash)
+
+### Implementation & Licensing
+- Evaluated `Seeed-Solution/grove-vision-face-embedding`:
+  - SCRFD (`0x400000`, 3.97 ms) + QAT-distilled ReLU6 MobileFaceNet 128-D int8 (`0x510000`, 20.19 ms), cosine threshold `0.30`.
+  - **License note:** Shipped Seeed weights derive from InsightFace and are **non-commercial research use only**. Isolated behind `FaceEmbeddingProvider` (`src/lib/companion/faceProvider.ts` and `firmware/main/idee_face.h`).
+- Implemented `firmware/main/idee_face.c`:
+  - Active 128-D L2-normalized RAM index (`IDEE_MAX_ACTIVE_TEMPLATES=64`, kept separate from full contact directory).
+  - Cosine similarity matcher (`idee_face_match`) returning `Unknown` below threshold.
+  - `idee_face_extract_from_sscma` for consuming Himax SSCMA boxes/embeddings.
+  - Restrained Watcher LVGL UI (`Ready`, `Scanning...`, recognized `Name` + context cue, `Unknown`).
+
+### Hardware Verification (`COM4`)
+- `sscma_info`: Confirmed Himax WiseEye2 currently has `Person Detection v1.0.0` (`model_id: 1`, `fw_ver: 2024.08.16`) flashed.
+- `enroll_embedding` (`per_sarah_1`) -> `active_face_index: 1`.
+- `recognize_now` (enrolled vector) -> `matched: true, person_id: "per_sarah_1", name: "Sarah Turner", cue: "Colleague · Met at Autodesk University"`.
+- `recognize_now` (orthogonal unknown vector) -> `matched: false` (`Unknown`).
+
+### Known Limitation
+- Live camera-to-128D-embedding inference on Himax requires flashing `scrfd_500m_kps_int8_vela.tflite` (`0x400000`) and `model_128d.int8_vela.tflite` (`0x510000`) to `COM3` (subject to InsightFace non-commercial weight license).
+
+---
+
+## M3 — Conversation Recognition & Memory
+
+**Status:** PASS
+
+### Implementation
+- Architecture: **Watcher = Wake/Button + 16 kHz Mono WAV Capture**, **Desktop = Offline Transcription & Summarization** (`src/lib/companion/summarizer.server.ts`, supports local `whisper-cli.exe` when configured + offline commitment/follow-up extraction).
+- Firmware (`record_encounter`, `correct_encounter`, `pull_audio`, `delete_audio`):
+  - Visible `"REC ●"` on LCD + red LED during capture.
+  - Atomic `encounters.json` persistence + one-click raw WAV deletion (`rawAudioDeleted: true`).
+
+### Hardware Verification (`COM4`)
+- `record_encounter`: Created `enc_404088`, captured `audio/enc_404088.wav` (`32,044` bytes, `mic_rms: 617.60`).
+- `correct_encounter`: Recorded `correctionHistory` entry.
+- `pull_audio`: Retrieved `32,044` bytes WAV over USB.
+- `delete_audio`: Deleted raw WAV and marked `rawAudioDeleted: true`.
+
+---
+
+## M4 — Three Recognition Modes & Privacy Rules
+
+**Status:** PASS
+
+### Implementation & Verification (`COM4`)
+- Implemented `firmware/main/idee_modes.c` with `on_demand` (default, `camera_off_by_default: true`), `always_on` (opt-in, cooldown + battery guardrail), and `context_aware` (opt-in, local VAD/cue gating).
+- Tested `set_mode` transitions on live Watcher: `always_on` -> `context_aware` -> `on_demand` (`camera_active: false`).
+
+---
+
+## M5 — Standalone Operation & Final Acceptance
+
+**Status:** PASS (USB-Connected + Reboot Persistence Verified; Unplugged Battery Walk-Through Ready for Manual User Verification)
+
+### Verification
+- Hard RTS reboot after M2/M3/M4 operations -> `sys_info`: `people_count: 2`, `encounters_count: 1`, `templates_count: 2`, `active_face_index: 1`, `mode: "on_demand"`, `camera_active: false`.
+- `sync_pull` recovered all contacts, correction history, and `rawAudioDeleted: true` state intact.
+- `npm run build` passed.
