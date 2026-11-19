@@ -14,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import {
+  deleteAudioOnWatcherFn,
   deleteEncounterFn,
   deletePersonFn,
   enrollFromWatcherCameraFn,
@@ -21,6 +22,8 @@ import {
   importContactsFn,
   listSerialPortsFn,
   mergePeopleFn,
+  pullFromWatcherFn,
+  recordEncounterOnWatcherFn,
   syncToWatcherFn,
   updateSettingsFn,
   upsertEncounterFn,
@@ -145,7 +148,14 @@ function CompanionPage() {
   }
 
   async function handleDeviceAction(
-    action: "ping" | "sys_info" | "hw_test" | "cam_snapshot" | "mic_capture",
+    action:
+      | "ping"
+      | "sys_info"
+      | "sscma_info"
+      | "hw_test"
+      | "cam_snapshot"
+      | "mic_capture"
+      | "recognize_now",
   ) {
     setStatusMsg(`Running ${action} on ${db.settings.comPort}...`);
     const res = await watcherCommandFn({
@@ -156,6 +166,31 @@ function CompanionPage() {
       setSnapshotUrl(`data:image/jpeg;base64,${res.image_b64}`);
     }
     setStatusMsg(res.ok ? `${action} succeeded.` : `${action} failed: ${String(res.error ?? "")}`);
+  }
+
+  async function handlePullEncounters() {
+    setStatusMsg(`Pulling encounters & audio from ${db.settings.comPort}...`);
+    const out = await pullFromWatcherFn({ data: { port: db.settings.comPort } });
+    setDb(out.db);
+    setDeviceInfo(out.res);
+    setStatusMsg(
+      out.res.ok
+        ? `Pulled ${out.pulled} new encounter(s) from Watcher.`
+        : `Pull failed: ${String(out.res.error ?? "")}`,
+    );
+  }
+
+  async function handleRecordOnWatcher() {
+    setStatusMsg(`Recording 2s consented encounter on ${db.settings.comPort}...`);
+    const res = await recordEncounterOnWatcherFn({
+      data: { port: db.settings.comPort, durationMs: 2000 },
+    });
+    setDeviceInfo(res);
+    setStatusMsg(
+      res.ok
+        ? `Recorded ${String(res.encounter_id ?? "encounter")} on Watcher. Click Pull Encounters to sync.`
+        : `Record failed: ${String(res.error ?? "")}`,
+    );
   }
 
   async function handleSync() {
@@ -443,16 +478,26 @@ function CompanionPage() {
 
         {tab === "encounters" && (
           <section className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lg font-semibold">Encounters ({db.encounters.length})</h2>
-              <button
-                type="button"
-                onClick={() => void handleAddSampleEncounter()}
-                className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
-              >
-                <Plus className="h-4 w-4" />
-                Log Manual Encounter
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handlePullEncounters()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Pull from Watcher
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAddSampleEncounter()}
+                  className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+                >
+                  <Plus className="h-4 w-4" />
+                  Log Manual Encounter
+                </button>
+              </div>
             </div>
             {db.encounters.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
@@ -486,16 +531,62 @@ function CompanionPage() {
                           </p>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const next = await deleteEncounterFn({ data: { encounterId: enc.id } });
-                          setDb(next);
-                        }}
-                        className="rounded border border-border p-1.5 text-destructive hover:bg-muted"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={enc.personId ?? ""}
+                          onChange={async (e) => {
+                            const nextPid = e.target.value || null;
+                            const updated: Encounter = {
+                              ...enc,
+                              personId: nextPid,
+                              correctionHistory: [
+                                ...enc.correctionHistory,
+                                {
+                                  at: new Date().toISOString(),
+                                  fromPersonId: enc.personId,
+                                  toPersonId: nextPid,
+                                  reason: "desktop_reassignment",
+                                },
+                              ],
+                            };
+                            const next = await upsertEncounterFn({ data: updated });
+                            setDb(next);
+                          }}
+                          className="rounded border border-border bg-background px-2 py-1 text-xs"
+                        >
+                          <option value="">Unresolved</option>
+                          {db.people.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.displayName}
+                            </option>
+                          ))}
+                        </select>
+                        {enc.audioPath && !enc.rawAudioDeleted && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const out = await deleteAudioOnWatcherFn({
+                                data: { port: db.settings.comPort, encounterId: enc.id },
+                              });
+                              setDb(out.db);
+                              setStatusMsg(`Deleted raw audio for ${enc.id}.`);
+                            }}
+                            className="rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                          >
+                            Delete Audio
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const next = await deleteEncounterFn({ data: { encounterId: enc.id } });
+                            setDb(next);
+                          }}
+                          className="rounded border border-border p-1.5 text-destructive hover:bg-muted"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -564,6 +655,13 @@ function CompanionPage() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => void handleDeviceAction("sscma_info")}
+                  className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+                >
+                  Himax Info
+                </button>
+                <button
+                  type="button"
                   onClick={() => void handleDeviceAction("hw_test")}
                   className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
                 >
@@ -575,6 +673,27 @@ function CompanionPage() {
                   className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
                 >
                   Capture Snapshot
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeviceAction("recognize_now")}
+                  className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+                >
+                  Test Recognition
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRecordOnWatcher()}
+                  className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+                >
+                  Record 2s Encounter
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handlePullEncounters()}
+                  className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+                >
+                  Pull Encounters
                 </button>
                 <button
                   type="button"

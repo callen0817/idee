@@ -40,6 +40,8 @@ static lv_obj_t *s_lbl_status = NULL;
 static lv_obj_t *s_lbl_cue = NULL;
 static lv_obj_t *s_lbl_stats = NULL;
 static lv_obj_t *s_lbl_battery = NULL;
+static volatile bool s_req_scan = false;
+static volatile bool s_req_record = false;
 
 static SemaphoreHandle_t s_snap_sem = NULL;
 static char *s_last_img_b64 = NULL;
@@ -195,7 +197,7 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
     if (strcmp(cmd, "ping") == 0) {
         cJSON_AddBoolToObject(res, "ok", true);
         cJSON_AddStringToObject(res, "fw", "idee-watcher");
-        cJSON_AddStringToObject(res, "ver", "0.2.0");
+        cJSON_AddStringToObject(res, "ver", "0.3.0");
         cJSON_AddStringToObject(res, "idf", IDF_VER);
         return res;
     }
@@ -208,7 +210,7 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
 
         cJSON_AddBoolToObject(res, "ok", true);
         cJSON_AddStringToObject(res, "fw", "idee-watcher");
-        cJSON_AddStringToObject(res, "ver", "0.2.0");
+        cJSON_AddStringToObject(res, "ver", "0.3.0");
         cJSON_AddStringToObject(res, "mode", idee_modes_name(mcfg.mode));
         cJSON_AddBoolToObject(res, "camera_active", s_camera_active);
         cJSON_AddBoolToObject(res, "camera_off_by_default", mcfg.camera_off_by_default);
@@ -650,6 +652,78 @@ static cJSON *handle_cmd(const char *cmd, cJSON *params, bool *ok_out)
     return res;
 }
 
+static void on_btn_scan_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_req_scan = true;
+}
+
+static void on_btn_record_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_req_record = true;
+}
+
+static void on_hw_btn_long_press(void)
+{
+    s_req_record = true;
+}
+
+static void run_standalone_scan(void)
+{
+    s_camera_active = true;
+    ui_set_state("Scanning...", "Looking for face");
+    bsp_rgb_set(0, 24, 36);
+
+    bool matched = false;
+    if (s_sscma && s_sscma_ready) {
+        xSemaphoreTake(s_snap_sem, 0);
+        if (sscma_client_sample(s_sscma, 1) == ESP_OK &&
+            xSemaphoreTake(s_snap_sem, pdMS_TO_TICKS(3000)) == pdTRUE &&
+            s_last_has_emb) {
+            idee_face_match_t m;
+            if (idee_face_match(s_last_emb, IDEE_FACE_DIM, IDEE_DEFAULT_FACE_THRESHOLD, &m) == ESP_OK && m.matched) {
+                char name[64], cue[128];
+                idee_face_lookup_person_cue(m.person_id, name, sizeof(name), cue, sizeof(cue));
+                ui_set_state(name[0] ? name : m.person_id, cue);
+                play_beep(1046, 80);
+                matched = true;
+            }
+        }
+    }
+
+    s_camera_active = (idee_modes_get() == IDEE_MODE_ALWAYS_ON);
+    bsp_rgb_set(0, 12, 8);
+    if (!matched) {
+        ui_set_state("Unknown", s_last_box_count > 0 ? "Face seen — enroll on Desktop" : "No enrolled face matched");
+    }
+}
+
+static void run_standalone_record(void)
+{
+    char enc_id[48];
+    snprintf(enc_id, sizeof(enc_id), "enc_%llu", (unsigned long long)(esp_timer_get_time() / 1000));
+    char rel_audio[96];
+    snprintf(rel_audio, sizeof(rel_audio), "audio/%s.wav", enc_id);
+
+    bsp_rgb_set(48, 0, 0);
+    ui_set_state("REC ●", "Recording 3s encounter...");
+    double rms = 0.0;
+    size_t wav_bytes = 0;
+    esp_err_t wav_err = capture_wav_to_file(rel_audio, 3000, &rms, &wav_bytes);
+    bsp_rgb_set(0, 12, 8);
+
+    if (idee_modes_save_encounter(
+            enc_id, NULL, "button",
+            "Standalone Watcher encounter (pending offline STT)",
+            0.0f, wav_err == ESP_OK ? rel_audio : NULL) == ESP_OK) {
+        play_beep(880, 90);
+        ui_set_state("Saved", enc_id);
+    } else {
+        ui_set_state("Save failed", "Check storage");
+    }
+}
+
 static void init_ui(void)
 {
     if (!s_disp) return;
@@ -662,35 +736,55 @@ static void init_ui(void)
         lv_label_set_text(s_lbl_title, "iDee");
         lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(0x6EE7B7), 0);
         lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_24, 0);
-        lv_obj_align(s_lbl_title, LV_ALIGN_TOP_MID, 0, 44);
+        lv_obj_align(s_lbl_title, LV_ALIGN_TOP_MID, 0, 36);
 
         s_lbl_status = lv_label_create(scr);
         lv_label_set_text(s_lbl_status, "Ready");
         lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(0xF3F4F6), 0);
         lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_24, 0);
-        lv_obj_align(s_lbl_status, LV_ALIGN_CENTER, 0, -40);
+        lv_obj_align(s_lbl_status, LV_ALIGN_CENTER, 0, -56);
 
         s_lbl_cue = lv_label_create(scr);
-        lv_label_set_text(s_lbl_cue, "");
+        lv_label_set_text(s_lbl_cue, "Tap Scan or Record");
         lv_label_set_long_mode(s_lbl_cue, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(s_lbl_cue, 320);
         lv_obj_set_style_text_color(s_lbl_cue, lv_color_hex(0xA7F3D0), 0);
         lv_obj_set_style_text_font(s_lbl_cue, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_align(s_lbl_cue, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_lbl_cue, LV_ALIGN_CENTER, 0, 12);
+        lv_obj_align(s_lbl_cue, LV_ALIGN_CENTER, 0, -10);
+
+        lv_obj_t *btn_scan = lv_btn_create(scr);
+        lv_obj_set_size(btn_scan, 112, 44);
+        lv_obj_set_style_bg_color(btn_scan, lv_color_hex(0x10B981), 0);
+        lv_obj_set_style_radius(btn_scan, 22, 0);
+        lv_obj_align(btn_scan, LV_ALIGN_CENTER, -66, 48);
+        lv_obj_add_event_cb(btn_scan, on_btn_scan_clicked, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl_scan = lv_label_create(btn_scan);
+        lv_label_set_text(lbl_scan, "Scan");
+        lv_obj_center(lbl_scan);
+
+        lv_obj_t *btn_rec = lv_btn_create(scr);
+        lv_obj_set_size(btn_rec, 112, 44);
+        lv_obj_set_style_bg_color(btn_rec, lv_color_hex(0x374151), 0);
+        lv_obj_set_style_radius(btn_rec, 22, 0);
+        lv_obj_align(btn_rec, LV_ALIGN_CENTER, 66, 48);
+        lv_obj_add_event_cb(btn_rec, on_btn_record_clicked, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl_rec = lv_label_create(btn_rec);
+        lv_label_set_text(lbl_rec, "Record");
+        lv_obj_center(lbl_rec);
 
         s_lbl_stats = lv_label_create(scr);
         lv_label_set_text(s_lbl_stats, "Mode: on_demand | Cam: OFF");
         lv_obj_set_style_text_color(s_lbl_stats, lv_color_hex(0x9CA3AF), 0);
         lv_obj_set_style_text_font(s_lbl_stats, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_align(s_lbl_stats, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_lbl_stats, LV_ALIGN_CENTER, 0, 76);
+        lv_obj_align(s_lbl_stats, LV_ALIGN_BOTTOM_MID, 0, -56);
 
         s_lbl_battery = lv_label_create(scr);
         lv_label_set_text(s_lbl_battery, "Bat: --%");
         lv_obj_set_style_text_color(s_lbl_battery, lv_color_hex(0x6B7280), 0);
         lv_obj_set_style_text_font(s_lbl_battery, &lv_font_montserrat_14, 0);
-        lv_obj_align(s_lbl_battery, LV_ALIGN_BOTTOM_MID, 0, -36);
+        lv_obj_align(s_lbl_battery, LV_ALIGN_BOTTOM_MID, 0, -28);
 
         lvgl_port_unlock();
     }
@@ -705,10 +799,11 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "=== iDee Watcher v0.2.0 Booting ===");
+    ESP_LOGI(TAG, "=== iDee Watcher v0.3.0 Booting ===");
 
     s_io_exp = bsp_io_expander_init();
     s_disp = bsp_lvgl_init();
+    bsp_set_btn_long_press_cb(on_hw_btn_long_press);
     bsp_lcd_brightness_set(80);
     bsp_rgb_init();
     bsp_rgb_set(0, 12, 8);
@@ -731,7 +826,7 @@ void app_main(void)
     }
 
     init_ui();
-    ui_set_state("Ready", "");
+    ui_set_state("Ready", "Tap Scan or Record");
     idee_protocol_start(handle_cmd);
 
     s_snap_sem = xSemaphoreCreateBinary();
@@ -745,7 +840,47 @@ void app_main(void)
         sscma_client_init(s_sscma);
     }
 
+    int64_t last_auto_scan_ms = 0;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        if (s_req_scan) {
+            s_req_scan = false;
+            run_standalone_scan();
+        }
+        if (s_req_record) {
+            s_req_record = false;
+            run_standalone_record();
+        }
+
+        idee_mode_config_t mcfg;
+        idee_modes_get_config(&mcfg);
+        int64_t now_ms = esp_timer_get_time() / 1000;
+
+        if (mcfg.mode == IDEE_MODE_ALWAYS_ON &&
+            (now_ms - last_auto_scan_ms) >= (int64_t)mcfg.always_on_interval_ms) {
+            if (bsp_battery_get_percent() >= 15 || bsp_system_is_charging()) {
+                last_auto_scan_ms = now_ms;
+                run_standalone_scan();
+            } else {
+                ui_set_state("Low Battery", "Always-On paused (<15%)");
+            }
+        } else if (mcfg.mode == IDEE_MODE_CONTEXT_AWARE &&
+                   (now_ms - last_auto_scan_ms) >= 5000 && s_codec_ready) {
+            int16_t vad_buf[320];
+            size_t rbytes = 0;
+            if (bsp_i2s_read(vad_buf, sizeof(vad_buf), &rbytes, 100) == ESP_OK && rbytes >= 320) {
+                double sum_sq = 0.0;
+                size_t n = rbytes / 2;
+                for (size_t i = 0; i < n; i++) {
+                    sum_sq += (double)vad_buf[i] * (double)vad_buf[i];
+                }
+                double rms = sqrt(sum_sq / (double)n);
+                if (rms >= mcfg.vad_rms_threshold) {
+                    last_auto_scan_ms = now_ms;
+                    ui_set_state("Voice Cue", "Speech detected — tap Scan");
+                }
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(150));
     }
 }

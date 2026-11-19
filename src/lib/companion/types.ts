@@ -102,6 +102,17 @@ export interface WatcherBridgeResponse {
   mic_ok?: boolean | undefined;
   mic_rms?: number | undefined;
   speaker_ok?: boolean | undefined;
+  model_name?: string | undefined;
+  model_ver?: string | undefined;
+  matched?: boolean | undefined;
+  confidence?: number | undefined;
+  person_id?: string | undefined;
+  name?: string | undefined;
+  cue?: string | undefined;
+  encounter_id?: string | undefined;
+  audio_path?: string | undefined;
+  audio_b64?: string | undefined;
+  encounters?: Encounter[] | undefined;
   rawJson?: string | undefined;
 }
 

@@ -110,12 +110,101 @@ export const listSerialPortsFn = createServerFn({ method: "GET" }).handler(async
 export const watcherCommandFn = createServerFn({ method: "POST" })
   .inputValidator(
     (data: {
-      action: "ping" | "sys_info" | "hw_test" | "cam_snapshot" | "mic_capture";
+      action:
+        | "ping"
+        | "sys_info"
+        | "sscma_info"
+        | "hw_test"
+        | "cam_snapshot"
+        | "mic_capture"
+        | "recognize_now";
       port: string;
     }) => data,
   )
   .handler(async ({ data }): Promise<WatcherBridgeResponse> => {
     return runWatcherBridge(data.action, data.port);
+  });
+
+export const pullFromWatcherFn = createServerFn({ method: "POST" })
+  .inputValidator((data: { port: string }) => data)
+  .handler(async ({ data }) => {
+    const { loadCompanionDb, saveCompanionDb } = await import("./store.server");
+    const {
+      saveLocalAudioWav,
+      summarizeEncounterOffline,
+      transcribeOfflineWhisper,
+    } = await import("./summarizer.server");
+
+    const res = await runWatcherBridge("sync_pull", data.port);
+    const db = loadCompanionDb();
+    let pulled = 0;
+
+    if (res.ok && Array.isArray(res.encounters)) {
+      for (const incoming of res.encounters) {
+        if (db.encounters.some((e) => e.id === incoming.id)) continue;
+        let summaryText = incoming.contextSummary || "";
+        let followUps = incoming.followUps ?? [];
+
+        if (incoming.audioPath && !incoming.rawAudioDeleted) {
+          const aud = await runWatcherBridge("pull_audio", data.port, {
+            audio_path: incoming.audioPath,
+          });
+          if (aud.ok && typeof aud.audio_b64 === "string") {
+            const wavPath = saveLocalAudioWav(
+              `${incoming.id}.wav`,
+              Buffer.from(aud.audio_b64, "base64"),
+            );
+            const transcript = await transcribeOfflineWhisper(wavPath);
+            const person = db.people.find((p) => p.id === incoming.personId);
+            const sum = summarizeEncounterOffline(transcript ?? summaryText, person?.displayName);
+            summaryText = sum.summary;
+            followUps = sum.followUps;
+          }
+        }
+
+        db.encounters.unshift({
+          ...incoming,
+          contextSummary: summaryText,
+          followUps,
+        });
+        pulled++;
+      }
+      saveCompanionDb(db);
+    }
+
+    return { res, db, pulled };
+  });
+
+export const recordEncounterOnWatcherFn = createServerFn({ method: "POST" })
+  .inputValidator(
+    (data: { port: string; personId?: string | null; durationMs?: number; summary?: string }) =>
+      data,
+  )
+  .handler(async ({ data }): Promise<WatcherBridgeResponse> => {
+    return runWatcherBridge("record_encounter", data.port, {
+      person_id: data.personId ?? "",
+      evidence_type: "button",
+      summary: data.summary ?? "Consented encounter from Companion",
+      duration_ms: data.durationMs ?? 2000,
+    });
+  });
+
+export const deleteAudioOnWatcherFn = createServerFn({ method: "POST" })
+  .inputValidator((data: { port: string; encounterId: string }) => data)
+  .handler(async ({ data }) => {
+    const { loadCompanionDb, saveCompanionDb } = await import("./store.server");
+    const { deleteLocalAudioWav } = await import("./summarizer.server");
+    const res = await runWatcherBridge("delete_audio", data.port, {
+      encounter_id: data.encounterId,
+    });
+    const db = loadCompanionDb();
+    const enc = db.encounters.find((e) => e.id === data.encounterId);
+    if (enc) {
+      deleteLocalAudioWav(enc.audioPath);
+      enc.rawAudioDeleted = true;
+      saveCompanionDb(db);
+    }
+    return { res, db };
   });
 
 export const syncToWatcherFn = createServerFn({ method: "POST" })
