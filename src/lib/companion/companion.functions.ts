@@ -42,6 +42,35 @@ async function runWatcherBridge(
   }
 }
 
+async function extractFaceEmbeddingServer(
+  imageB64: string,
+): Promise<{ ok: boolean; embedding?: number[]; face_detected?: boolean; error?: string }> {
+  const { spawn } = await import("node:child_process");
+  const { join } = await import("node:path");
+  const scriptPath = join(process.cwd(), "scripts", "face_embed.py");
+
+  return new Promise((resolve) => {
+    const proc = spawn("python", [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf-8");
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
+    });
+    proc.on("close", () => {
+      try {
+        resolve(JSON.parse(stdout.trim()) as { ok: boolean; embedding?: number[]; face_detected?: boolean; error?: string });
+      } catch {
+        resolve({ ok: false, error: stderr || "face_embed_failed" });
+      }
+    });
+    proc.stdin.write(JSON.stringify({ image_b64: imageB64 }));
+    proc.stdin.end();
+  });
+}
+
 export const getCompanionDbFn = createServerFn({ method: "GET" }).handler(
   async (): Promise<CompanionDatabase> => {
     const { loadCompanionDb } = await import("./store.server");
@@ -233,6 +262,7 @@ export const syncToWatcherFn = createServerFn({ method: "POST" })
         embeddingDim: t.embeddingDim,
         quantization: t.quantization,
         embeddingB64: t.embeddingB64,
+        embedding: t.embedding,
         enrollmentProvenance: t.enrollmentProvenance,
       }));
     const res = await runWatcherBridge("sync_push", data.port, {
@@ -257,23 +287,59 @@ export const enrollFromWatcherCameraFn = createServerFn({ method: "POST" })
     if (!snap.ok || typeof snap.image_b64 !== "string") {
       return { ok: false, error: snap.error || "snapshot_failed" };
     }
+    const embRes = await extractFaceEmbeddingServer(snap.image_b64);
+    const vec = embRes.ok && Array.isArray(embRes.embedding) ? embRes.embedding : undefined;
+
+    if (vec && vec.length === 128) {
+      await runWatcherBridge("enroll_embedding", data.port, {
+        person_id: data.personId,
+        model_id: "scrfd-mfn-128d-onnx",
+        model_version: "1.0.0",
+        embedding: vec,
+      });
+    }
+
     const tpl: RecognitionTemplate = {
       id: `tpl_${Date.now()}`,
       personId: data.personId,
-      modelId: "watcher-sscma-pending-m2",
-      modelVersion: "0.1.0",
+      modelId: "scrfd-mfn-128d-onnx",
+      modelVersion: "1.0.0",
       embeddingDim: 128,
-      quantization: "int8",
+      quantization: "fp32",
       embeddingB64: snap.image_b64.slice(0, 256),
+      embedding: vec,
       enrollmentProvenance: "watcher_camera",
       consentGiven: true,
       createdAt: new Date().toISOString(),
     };
     const db = addTemplate(tpl);
     const person = db.people.find((p) => p.id === data.personId);
-    if (person && !person.photoDataUrl) {
+    if (person) {
       person.photoDataUrl = `data:image/jpeg;base64,${snap.image_b64}`;
       saveCompanionDb(db);
     }
-    return { ok: true, db: loadCompanionDb(), boxCount: snap.box_count ?? 0 };
+    return {
+      ok: true,
+      db: loadCompanionDb(),
+      faceDetected: Boolean(embRes.face_detected),
+      boxCount: snap.box_count ?? 0,
+    };
+  });
+
+export const recognizeFromWatcherCameraFn = createServerFn({ method: "POST" })
+  .inputValidator((data: { port: string }) => data)
+  .handler(async ({ data }): Promise<WatcherBridgeResponse> => {
+    const snap = await runWatcherBridge("cam_snapshot", data.port);
+    if (!snap.ok || typeof snap.image_b64 !== "string") {
+      return snap;
+    }
+    const embRes = await extractFaceEmbeddingServer(snap.image_b64);
+    if (!embRes.ok || !Array.isArray(embRes.embedding)) {
+      return { ok: false, error: embRes.error || "embedding_extraction_failed" };
+    }
+    const rec = await runWatcherBridge("recognize_now", data.port, {
+      embedding: embRes.embedding,
+      threshold: 0.3,
+    });
+    return { ...rec, image_b64: snap.image_b64 };
   });

@@ -23,6 +23,7 @@ import {
   listSerialPortsFn,
   mergePeopleFn,
   pullFromWatcherFn,
+  recognizeFromWatcherCameraFn,
   recordEncounterOnWatcherFn,
   syncToWatcherFn,
   updateSettingsFn,
@@ -30,7 +31,12 @@ import {
   upsertPersonFn,
   watcherCommandFn,
 } from "../lib/companion/companion.functions";
-import { parseContactsCsv, parseVCard } from "../lib/companion/importers";
+import {
+  parseContactsCsv,
+  parseGooglePhotosImport,
+  parseNamedImageFiles,
+  parseVCard,
+} from "../lib/companion/importers";
 import {
   DEFAULT_SETTINGS,
   type ActivationMode,
@@ -107,19 +113,48 @@ function CompanionPage() {
     );
   }, [db.people, search]);
 
+  async function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.readAsDataURL(file);
+    });
+  }
+
   async function handleFileImport(files: FileList | null) {
     if (!files || files.length === 0) return;
     const imported: Person[] = [];
+    const jsonFiles: Array<{ name: string; text: string }> = [];
+    const imageMap: Record<string, string> = {};
+    const imageList: Array<{ name: string; dataUrl: string }> = [];
+
     for (const file of Array.from(files)) {
-      const text = await file.text();
-      if (file.name.toLowerCase().endsWith(".vcf")) {
-        imported.push(...parseVCard(text));
-      } else if (file.name.toLowerCase().endsWith(".csv")) {
-        imported.push(...parseContactsCsv(text));
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith(".vcf")) {
+        imported.push(...parseVCard(await file.text()));
+      } else if (lower.endsWith(".csv")) {
+        imported.push(...parseContactsCsv(await file.text()));
+      } else if (lower.endsWith(".json")) {
+        jsonFiles.push({ name: file.name, text: await file.text() });
+      } else if (file.type.startsWith("image/") || /\.(jpe?g|png|webp)$/i.test(lower)) {
+        const dataUrl = await fileToDataUrl(file);
+        if (dataUrl) {
+          imageMap[lower] = dataUrl;
+          imageList.push({ name: file.name, dataUrl });
+        }
       }
     }
+
+    if (jsonFiles.length > 0) {
+      imported.push(...parseGooglePhotosImport(jsonFiles, imageMap));
+    } else if (imageList.length > 0) {
+      imported.push(...parseNamedImageFiles(imageList));
+    }
+
     if (imported.length === 0) {
-      setStatusMsg("No contacts found in selected .vcf / .csv file.");
+      setStatusMsg(
+        "No contacts found. Select .vcf, .csv, Google Photos People & Pets .json, Takeout .json + photos, or named photos (e.g. 'Jane Doe.jpg').",
+      );
       return;
     }
     const res = await importContactsFn({ data: { people: imported } });
@@ -178,6 +213,26 @@ function CompanionPage() {
         ? `Pulled ${out.pulled} new encounter(s) from Watcher.`
         : `Pull failed: ${String(out.res.error ?? "")}`,
     );
+  }
+
+  async function handleTestLiveRecognition() {
+    setStatusMsg(`Capturing frame & matching 128-D MobileFaceNet embedding on ${db.settings.comPort}...`);
+    const res = await recognizeFromWatcherCameraFn({ data: { port: db.settings.comPort } });
+    setDeviceInfo(res);
+    if (typeof res.image_b64 === "string") {
+      setSnapshotUrl(`data:image/jpeg;base64,${res.image_b64}`);
+    }
+    if (res.ok && res.matched) {
+      setStatusMsg(
+        `Recognized: ${String(res.name ?? res.person_id)} (confidence: ${Number(res.confidence ?? 0).toFixed(2)}) — displayed on Watcher!`,
+      );
+    } else if (res.ok) {
+      setStatusMsg(
+        `Unknown person (best cosine score: ${Number(res.confidence ?? 0).toFixed(2)} < 0.30).`,
+      );
+    } else {
+      setStatusMsg(`Recognition failed: ${String(res.error ?? "unknown")}`);
+    }
   }
 
   async function handleRecordOnWatcher() {
@@ -282,10 +337,10 @@ function CompanionPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted">
                   <Upload className="h-4 w-4" />
-                  Import .vcf / .csv
+                  Import .vcf / .csv / Google Photos
                   <input
                     type="file"
-                    accept=".vcf,.csv"
+                    accept=".vcf,.csv,.json,image/*"
                     multiple
                     className="hidden"
                     onChange={(e) => void handleFileImport(e.target.files)}
@@ -402,13 +457,22 @@ function CompanionPage() {
                 {filteredPeople.map((p) => (
                   <div key={p.id} className="rounded-xl border border-border bg-card p-4 space-y-2">
                     <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-semibold">{p.displayName}</h3>
-                        {(p.role || p.company) && (
-                          <p className="text-xs text-muted-foreground">
-                            {[p.role, p.company].filter(Boolean).join(" · ")}
-                          </p>
+                      <div className="flex items-center gap-2.5">
+                        {p.photoDataUrl && (
+                          <img
+                            src={p.photoDataUrl}
+                            alt={p.displayName}
+                            className="h-10 w-10 rounded-full border border-border object-cover"
+                          />
                         )}
+                        <div>
+                          <h3 className="font-semibold">{p.displayName}</h3>
+                          {(p.role || p.company) && (
+                            <p className="text-xs text-muted-foreground">
+                              {[p.role, p.company].filter(Boolean).join(" · ")}
+                            </p>
+                          )}
+                        </div>
                       </div>
                       <span className="rounded-full border border-border px-2 py-0.5 text-[11px]">
                         {p.enrollmentStatus}
@@ -676,7 +740,7 @@ function CompanionPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleDeviceAction("recognize_now")}
+                  onClick={() => void handleTestLiveRecognition()}
                   className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
                 >
                   Test Recognition

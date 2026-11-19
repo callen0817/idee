@@ -218,3 +218,112 @@ export function mergeImportedPeople(
 
   return { merged: copy, added, updated };
 }
+
+/**
+ * Parse Google Photos People & Pets browser-extension export OR Google Takeout sidecar JSONs
+ * paired with local image files (data URLs keyed by lowercase filename).
+ */
+export function parseGooglePhotosImport(
+  jsonFiles: Array<{ name: string; text: string }>,
+  imageDataUrlsByFilename: Record<string, string>,
+): Person[] {
+  const now = new Date().toISOString();
+  const people: Person[] = [];
+
+  for (const jf of jsonFiles) {
+    try {
+      const parsed = JSON.parse(jf.text) as {
+        source?: string;
+        title?: string;
+        description?: string;
+        people?: Array<{ name?: string; displayName?: string; photoDataUrl?: string }>;
+      };
+
+      // 1) Browser extension export (google-photos-people.json)
+      if (parsed.source === "idee_google_photos_people_v1" && Array.isArray(parsed.people)) {
+        for (const item of parsed.people) {
+          const name = (item.displayName ?? item.name ?? "").trim();
+          if (!name) continue;
+          const photo = item.photoDataUrl && item.photoDataUrl.startsWith("data:image/")
+            ? item.photoDataUrl
+            : undefined;
+          people.push({
+            id: makeStableId(name),
+            displayName: name,
+            aliases: [],
+            company: "",
+            role: "",
+            relationship: "Google Photos",
+            notes: "Imported from Google Photos People & Pets",
+            emails: [],
+            phones: [],
+            photoDataUrl: photo,
+            enrollmentStatus: photo ? "photo_candidate" : "none",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        continue;
+      }
+
+      // 2) Google Takeout sidecar JSON ({"title":"IMG_001.jpg","people":[{"name":"Jane Doe"}]})
+      if (Array.isArray(parsed.people) && parsed.people.length > 0) {
+        const titleKey = (parsed.title ?? jf.name.replace(/\.json$/i, "")).toLowerCase();
+        const matchedPhoto = imageDataUrlsByFilename[titleKey];
+        for (const tagged of parsed.people) {
+          const name = (tagged.name ?? tagged.displayName ?? "").trim();
+          if (!name) continue;
+          people.push({
+            id: makeStableId(name),
+            displayName: name,
+            aliases: [],
+            company: "",
+            role: "",
+            relationship: "Google Photos Takeout",
+            notes: parsed.description ? String(parsed.description) : `Tagged in ${parsed.title ?? jf.name}`,
+            emails: [],
+            phones: [],
+            photoDataUrl: matchedPhoto,
+            enrollmentStatus: matchedPhoto ? "photo_candidate" : "none",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+    } catch {
+      // ignore invalid JSON file
+    }
+  }
+
+  return people;
+}
+
+/**
+ * Create contacts from named image files (e.g. "Sarah Turner.jpg") that weren't matched by Takeout sidecars.
+ */
+export function parseNamedImageFiles(
+  images: Array<{ name: string; dataUrl: string }>,
+): Person[] {
+  const now = new Date().toISOString();
+  const out: Person[] = [];
+  for (const img of images) {
+    const base = img.name.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").trim();
+    if (!base || /^(img|dsc|pxl|photo|image|screenshot)\s*\d*$/i.test(base)) continue;
+    out.push({
+      id: makeStableId(base),
+      displayName: base,
+      aliases: [],
+      company: "",
+      role: "",
+      relationship: "Photo Import",
+      notes: `Imported from ${img.name}`,
+      emails: [],
+      phones: [],
+      photoDataUrl: img.dataUrl,
+      enrollmentStatus: "photo_candidate",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return out;
+}

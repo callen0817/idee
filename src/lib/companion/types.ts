@@ -26,6 +26,7 @@ export interface RecognitionTemplate {
   embeddingDim: number;
   quantization: "int8" | "fp16" | "fp32";
   embeddingB64: string;
+  embedding?: number[] | undefined;
   enrollmentProvenance: "watcher_camera" | "imported_photo";
   consentGiven: boolean;
   createdAt: string;

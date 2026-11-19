@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "iDee — Google Photos People & Pets Importer",
+  "version": "1.0.0",
+  "description": "Exports named People & Pets face tiles from photos.google.com/people into iDee Companion.",
+  "permissions": ["clipboardWrite"],
+  "content_scripts": [
+    {
+      "matches": ["https://photos.google.com/people*", "https://photos.google.com/u/*/people*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
