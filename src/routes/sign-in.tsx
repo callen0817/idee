@@ -37,9 +37,12 @@ function SignInPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void supabase.auth.getUser().then(({ data }) => {
-      if (data.user) void navigate({ to: "/my" });
-    });
+    void supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (data.user) void navigate({ to: "/my" });
+      })
+      .catch(() => {});
   }, [navigate]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -49,12 +52,16 @@ function SignInPage() {
     setMessage("");
     try {
       if (mode === "sign-up") {
-        const { error: signUpError } = await supabase.auth.signUp({
+        const { data, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: { emailRedirectTo: `${window.location.origin}/my` },
         });
         if (signUpError) throw signUpError;
+        if (data.session) {
+          await navigate({ to: "/my" });
+          return;
+        }
         setMessage("Check your email to confirm your address, then sign in.");
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
@@ -69,16 +76,24 @@ function SignInPage() {
   }
 
   async function google() {
+    setBusy(true);
     setError("");
-    const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
-    if (result.error) {
-      setError(result.error.message);
-      return;
-    }
-    if (!("redirected" in result && result.redirected)) {
-      await navigate({ to: "/my" });
+    setMessage("");
+    try {
+      const result = await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin,
+      });
+      if (result.error) {
+        setError(result.error.message);
+        return;
+      }
+      if (!("redirected" in result && result.redirected)) {
+        await navigate({ to: "/my" });
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not sign in with Google.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -94,7 +109,13 @@ function SignInPage() {
             <p className="mt-4 text-sm leading-6 text-muted-foreground">
               My IDee is an early shell while the product is in development.
             </p>
-            <Button variant="glass" className="mt-8 w-full" onClick={google} type="button">
+            <Button
+              variant="glass"
+              className="mt-8 w-full"
+              onClick={google}
+              disabled={busy}
+              type="button"
+            >
               Continue with Google
             </Button>
             <div className="my-7 flex items-center gap-4 text-xs uppercase text-muted-foreground">

@@ -32,8 +32,8 @@ function MyPage() {
             <StatusLabel>Early shell</StatusLabel>
             <h1 className="display-title mt-6 text-4xl sm:text-6xl">MY IDEE.</h1>
             <p className="mt-6 max-w-xl text-base leading-7 text-muted-foreground">
-              Signed in as {user.email}. Your Circle, Heat and participation history will live here as IDee
-              opens in your city.
+              Signed in as {user.email ?? "your account"}. Your Circle, Heat and participation
+              history will live here as IDee opens in your city.
             </p>
           </div>
         </div>
