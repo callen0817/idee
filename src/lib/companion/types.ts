@@ -12,7 +12,7 @@ export interface Person {
   notes: string;
   emails: string[];
   phones: string[];
-  photoDataUrl?: string;
+  photoDataUrl?: string | undefined;
   enrollmentStatus: EnrollmentStatus;
   createdAt: string;
   updatedAt: string;
@@ -29,7 +29,7 @@ export interface RecognitionTemplate {
   enrollmentProvenance: "watcher_camera" | "imported_photo";
   consentGiven: boolean;
   createdAt: string;
-  deletedAt?: string;
+  deletedAt?: string | undefined;
 }
 
 export interface EncounterCorrection {
@@ -48,8 +48,8 @@ export interface Encounter {
   followUps: string[];
   confidence: number;
   correctionHistory: EncounterCorrection[];
-  audioPath?: string;
-  rawAudioDeleted?: boolean;
+  audioPath?: string | undefined;
+  rawAudioDeleted?: boolean | undefined;
 }
 
 export interface CompanionSettings {
@@ -63,14 +63,56 @@ export interface CompanionSettings {
   comPort: string;
 }
 
+export interface SerialPortInfo {
+  device: string;
+  description: string;
+  hwid?: string | undefined;
+  vid?: number | null | undefined;
+  pid?: number | null | undefined;
+  serialNumber?: string | null | undefined;
+}
+
+export interface WatcherBridgeResponse {
+  ok: boolean;
+  error?: string | undefined;
+  ports?: SerialPortInfo[] | undefined;
+  fw?: string | undefined;
+  ver?: string | undefined;
+  idf?: string | undefined;
+  mode?: string | undefined;
+  camera_active?: boolean | undefined;
+  free_heap?: number | undefined;
+  free_psram?: number | undefined;
+  battery_mv?: number | undefined;
+  battery_pct?: number | undefined;
+  charging?: boolean | undefined;
+  sd_mounted?: boolean | undefined;
+  storage_dir?: string | undefined;
+  sscma_ready?: boolean | undefined;
+  codec_ready?: boolean | undefined;
+  people_count?: number | undefined;
+  encounters_count?: number | undefined;
+  templates_count?: number | undefined;
+  active_face_index?: number | undefined;
+  image_b64?: string | undefined;
+  box_count?: number | undefined;
+  sync_id?: string | undefined;
+  duplicate?: boolean | undefined;
+  storage_ok?: boolean | undefined;
+  mic_ok?: boolean | undefined;
+  mic_rms?: number | undefined;
+  speaker_ok?: boolean | undefined;
+  rawJson?: string | undefined;
+}
+
 export interface CompanionDatabase {
   version: number;
   people: Person[];
   templates: RecognitionTemplate[];
   encounters: Encounter[];
   settings: CompanionSettings;
-  lastSyncAt?: string;
-  lastSyncId?: string;
+  lastSyncAt?: string | undefined;
+  lastSyncId?: string | undefined;
 }
 
 export const DEFAULT_SETTINGS: CompanionSettings = {

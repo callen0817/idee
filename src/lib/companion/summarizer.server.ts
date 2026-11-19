@@ -32,13 +32,13 @@ export function deleteLocalAudioWav(audioPath?: string): boolean {
  */
 export async function transcribeOfflineWhisper(wavPath: string): Promise<string | null> {
   const candidates = [
-    process.env.WHISPER_CLI_PATH,
+    process.env["WHISPER_CLI_PATH"],
     "C:\\tools\\whisper\\whisper-cli.exe",
     "C:\\whisper\\whisper-cli.exe",
   ].filter(Boolean) as string[];
 
   const bin = candidates.find((p) => existsSync(p));
-  const model = process.env.WHISPER_MODEL_PATH;
+  const model = process.env["WHISPER_MODEL_PATH"];
   if (!bin || !model || !existsSync(model)) {
     return null;
   }

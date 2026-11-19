@@ -30,7 +30,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   const nb = l2Normalize(b);
   let dot = 0;
   for (let i = 0; i < na.length; i++) {
-    dot += na[i] * nb[i];
+    dot += (na[i] ?? 0) * (nb[i] ?? 0);
   }
   return dot;
 }

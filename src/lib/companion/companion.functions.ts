@@ -5,13 +5,14 @@ import type {
   Encounter,
   Person,
   RecognitionTemplate,
+  WatcherBridgeResponse,
 } from "./types";
 
 async function runWatcherBridge(
   action: string,
   port = "COM4",
   params?: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
+): Promise<WatcherBridgeResponse> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const { join } = await import("node:path");
@@ -23,12 +24,16 @@ async function runWatcherBridge(
   }
   try {
     const { stdout } = await execFileAsync("python", args, { timeout: 15000 });
-    return JSON.parse(stdout.trim()) as Record<string, unknown>;
+    const trimmed = stdout.trim();
+    const parsed = JSON.parse(trimmed) as WatcherBridgeResponse;
+    return { ...parsed, rawJson: trimmed };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
     if (e.stdout) {
       try {
-        return JSON.parse(e.stdout.trim()) as Record<string, unknown>;
+        const trimmed = e.stdout.trim();
+        const parsed = JSON.parse(trimmed) as WatcherBridgeResponse;
+        return { ...parsed, rawJson: trimmed };
       } catch {
         // fall through
       }
@@ -107,11 +112,10 @@ export const watcherCommandFn = createServerFn({ method: "POST" })
     (data: {
       action: "ping" | "sys_info" | "hw_test" | "cam_snapshot" | "mic_capture";
       port: string;
-      params?: Record<string, unknown>;
     }) => data,
   )
-  .handler(async ({ data }) => {
-    return runWatcherBridge(data.action, data.port, data.params);
+  .handler(async ({ data }): Promise<WatcherBridgeResponse> => {
+    return runWatcherBridge(data.action, data.port);
   });
 
 export const syncToWatcherFn = createServerFn({ method: "POST" })

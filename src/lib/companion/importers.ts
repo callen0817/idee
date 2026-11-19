@@ -53,7 +53,7 @@ export function parseVCard(vcfText: string): Person[] {
       } else if (prop === "NICKNAME") {
         aliases.push(...val.split(","));
       } else if (prop === "ORG") {
-        company = val.split(";")[0].trim();
+        company = (val.split(";")[0] ?? "").trim();
       } else if (prop === "TITLE") {
         role = val;
       } else if (prop === "NOTE") {
@@ -126,20 +126,21 @@ export function parseContactsCsv(csvText: string): Person[] {
   const lines = csvText.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) return [];
 
-  const headers = parseCsvRow(lines[0]).map((h) => h.toLowerCase());
+  const headers = parseCsvRow(lines[0] ?? "").map((h) => h.toLowerCase());
   const now = new Date().toISOString();
   const results: Person[] = [];
 
   const col = (row: string[], ...names: string[]): string => {
     for (const name of names) {
       const idx = headers.indexOf(name.toLowerCase());
-      if (idx >= 0 && row[idx]) return row[idx].trim();
+      const cell = idx >= 0 ? row[idx] : undefined;
+      if (cell) return cell.trim();
     }
     return "";
   };
 
   for (let i = 1; i < lines.length; i++) {
-    const row = parseCsvRow(lines[i]);
+    const row = parseCsvRow(lines[i] ?? "");
     const first = col(row, "first name", "given name");
     const last = col(row, "last name", "family name");
     const full = col(row, "name", "display name", "full name") || [first, last].filter(Boolean).join(" ").trim();

@@ -34,6 +34,7 @@ import {
   type CompanionDatabase,
   type Encounter,
   type Person,
+  type WatcherBridgeResponse,
 } from "../lib/companion/types";
 
 export const Route = createFileRoute("/companion")({
@@ -64,7 +65,7 @@ function CompanionPage() {
   const [statusMsg, setStatusMsg] = useState<string>("");
   const [search, setSearch] = useState("");
   const [ports, setPorts] = useState<Array<{ device: string; description: string }>>([]);
-  const [deviceInfo, setDeviceInfo] = useState<Record<string, unknown> | null>(null);
+  const [deviceInfo, setDeviceInfo] = useState<WatcherBridgeResponse | null>(null);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [mergeSourceId, setMergeSourceId] = useState<string>("");
